@@ -107,10 +107,10 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - name: ubuntu-20.04_armv8
-            runs-on: ubuntu-20.04
-          - name: ubuntu-20.04_x86_64
-            runs-on: ubuntu-20.04
+          - name: ubuntu-22.04_armv8
+            runs-on: ubuntu-22.04
+          - name: ubuntu-22.04_x86_64
+            runs-on: ubuntu-22.04
           - name: android
             runs-on: ubuntu-22.04
     runs-on: ${{ matrix.platform.runs-on }}
@@ -190,10 +190,10 @@ jobs:
           platform: ios
       - uses: ./.github/actions/download
         with:
-          platform: ubuntu-20.04_armv8
+          platform: ubuntu-22.04_armv8
       - uses: ./.github/actions/download
         with:
-          platform: ubuntu-20.04_x86_64
+          platform: ubuntu-22.04_x86_64
       - uses: ./.github/actions/download
         with:
           platform: android
