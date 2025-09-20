@@ -2,3 +2,6 @@
 /_build
 /_package
 .idea
+
+# python
+.mypy_cache/
