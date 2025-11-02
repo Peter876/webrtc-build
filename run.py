@@ -686,6 +686,7 @@ WEBRTC_BUILD_TARGETS_MACOS_COMMON = [
     "sdk:native_api",
     "sdk:default_codec_factory_objc",
     "pc:peer_connection",
+    "pc:jsep_transport_controller",
     "sdk:videocapture_objc",
 ]
 WEBRTC_BUILD_TARGETS = {
