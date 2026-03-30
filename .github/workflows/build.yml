@@ -109,9 +109,9 @@ jobs:
       matrix:
         platform:
           - name: ubuntu-20.04_armv8
-            runs-on: ubuntu-20.04
+            runs-on: ubuntu-latest
           - name: ubuntu-20.04_x86_64
-            runs-on: ubuntu-20.04
+            runs-on: ubuntu-latest
           - name: android
             runs-on: ubuntu-22.04
     runs-on: ${{ matrix.platform.runs-on }}
@@ -174,7 +174,7 @@ jobs:
       - build-windows
       - build-macos
       - build-linux
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/download
