@@ -8,9 +8,10 @@ import re
 import shutil
 import subprocess
 import tarfile
+import tempfile
 import urllib.parse
 import zipfile
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 logging.basicConfig(level=logging.INFO)
 
@@ -200,6 +201,19 @@ PATCHES = {
         "fix_moved_function_call.patch",
         "remove_crel.patch",
     ],
+    "windows_x86": [
+        "4k.patch",
+        "revive_proxy.patch",
+        "add_license_dav1d.patch",
+        "windows_add_deps.patch",
+        "windows_silence_warnings.patch",
+        "windows_fix_audio_device.patch",
+        "ssl_verify_callback_with_native_handle.patch",
+        "h265.patch",
+        "fix_perfetto.patch",
+        "fix_moved_function_call.patch",
+        "remove_crel.patch",
+    ],
     "windows_arm64": [
         "4k.patch",
         "revive_proxy.patch",
@@ -229,7 +243,7 @@ PATCHES = {
         "fix_perfetto.patch",
         "fix_moved_function_call.patch",
         # 既に macos_use_xcode_clang.patch で同じ内容を適用済み
-        # "remove_crel.patch",
+        "remove_crel.patch",
     ],
     "ios": [
         "add_deps.patch",
@@ -704,7 +718,7 @@ WEBRTC_BUILD_TARGETS = {
 
 def get_build_targets(target):
     ts = [":default"]
-    if target not in ("windows_x86_64", "windows_arm64", "ios", "macos_arm64"):
+    if target not in ("windows_x86_64", "windows_x86", "windows_arm64", "ios", "macos_arm64"):
         ts += ["buildtools/third_party/libc++"]
     ts += WEBRTC_BUILD_TARGETS.get(target, [])
     return ts
@@ -721,11 +735,112 @@ def to_gn_args(gn_args: List[str], extra_gn_args: str) -> str:
     return s + " " + extra_gn_args
 
 
+def get_checkout_gn_candidates(webrtc_src_dir: str) -> List[str]:
+    exe = ".exe" if platform.system() == "Windows" else ""
+    candidates = [os.path.join(webrtc_src_dir, "third_party", "gn", "gn" + exe)]
+
+    if platform.system() == "Windows":
+        buildtools_dir = os.path.join(webrtc_src_dir, "buildtools", "win")
+    elif platform.system() == "Darwin":
+        buildtools_dir = os.path.join(webrtc_src_dir, "buildtools", "mac")
+    else:
+        buildtools_dir = os.path.join(webrtc_src_dir, "buildtools", "linux64")
+
+    candidates += [
+        os.path.join(buildtools_dir, "gn", "gn" + exe),
+        os.path.join(buildtools_dir, "gn" + exe),
+    ]
+    return candidates
+
+
+def get_gn_cipd_package(webrtc_src_dir: str) -> Optional[Tuple[str, str, str]]:
+    if platform.system() == "Windows":
+        subdir = "buildtools/win"
+    elif platform.system() == "Darwin":
+        subdir = "buildtools/mac"
+    else:
+        subdir = "buildtools/linux64"
+
+    gclient_entries_path = os.path.join(os.path.dirname(webrtc_src_dir), ".gclient_entries")
+    if not os.path.exists(gclient_entries_path):
+        return None
+
+    scope: Dict[str, Dict[str, str]] = {}
+    with open(gclient_entries_path, encoding="utf-8") as f:
+        exec(f.read(), scope)
+
+    prefix = f"src/{subdir}:"
+    entries = scope.get("entries", {})
+    for key, value in entries.items():
+        if key.startswith(prefix):
+            package = key.split(":", 1)[1]
+            version = value.rsplit("@", 1)[-1]
+            return os.path.join(webrtc_src_dir, *subdir.split("/")), package, version
+    return None
+
+
+def ensure_checkout_gn(webrtc_src_dir: str):
+    candidates = get_checkout_gn_candidates(webrtc_src_dir)
+    if any(os.path.isfile(path) for path in candidates):
+        return
+
+    cipd_package = get_gn_cipd_package(webrtc_src_dir)
+    install_error = None
+
+    if cipd_package is not None:
+        gn_root, package, version = cipd_package
+        mkdir_p(gn_root)
+        logging.warning(f"GN binary is missing from checkout, trying CIPD: {package} {version}")
+        ensure_file = None
+        try:
+            with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as f:
+                f.write(f"{package} {version}\n")
+                ensure_file = f.name
+            cmd(["cipd", "ensure", "-root", gn_root, "-ensure-file", ensure_file])
+        except subprocess.CalledProcessError as e:
+            install_error = str(e)
+        finally:
+            if ensure_file is not None and os.path.exists(ensure_file):
+                os.remove(ensure_file)
+
+    if any(os.path.isfile(path) for path in candidates):
+        return
+
+    message = [
+        "GN binary is missing from the WebRTC checkout.",
+        f"Checked: {', '.join(candidates)}.",
+    ]
+    if cipd_package is None:
+        message.append("Could not find a GN CIPD entry in .gclient_entries.")
+    elif install_error is not None:
+        message.append(f"Attempt to install GN via CIPD failed: {install_error}.")
+    message.append(
+        "Run `python run.py fetch <target>` or repair the checkout so one of the checked GN paths exists."
+    )
+    raise RuntimeError(" ".join(message))
+
+
 def gn_gen(webrtc_src_dir: str, webrtc_build_dir: str, gn_args: List[str], extra_gn_args: str):
     with cd(webrtc_src_dir):
+        ensure_checkout_gn(webrtc_src_dir)
         args = ["gn", "gen", webrtc_build_dir, "--args=" + to_gn_args(gn_args, extra_gn_args)]
         logging.info(" ".join(args))
         return cmd(args)
+
+
+def needs_gn_gen(build_dir: str, force: bool = False) -> bool:
+    if force:
+        return True
+
+    args_gn = os.path.join(build_dir, "args.gn")
+    build_ninja = os.path.join(build_dir, "build.ninja")
+
+    if not os.path.exists(args_gn):
+        return True
+    if not os.path.exists(build_ninja):
+        logging.info(f"Regenerating GN files because {build_ninja} is missing")
+        return True
+    return False
 
 
 def get_webrtc_version_info(version_info: VersionInfo):
@@ -835,7 +950,7 @@ def build_webrtc_ios(
                 ]
             )
 
-        if not os.path.exists(os.path.join(work_dir, "args.gn")) or gen or overlap_build_dir:
+        if needs_gn_gen(work_dir, force=gen or overlap_build_dir):
             gn_args = [
                 f"is_debug={'true' if debug else 'false'}",
                 'target_os="ios"',
@@ -937,7 +1052,7 @@ def build_webrtc_android(
         work_dir = os.path.join(webrtc_build_dir, arch)
         if gen_force:
             rm_rf(work_dir)
-        if not os.path.exists(os.path.join(work_dir, "args.gn")) or gen:
+        if needs_gn_gen(work_dir, force=gen):
             gn_args = [
                 *gn_args_base,
                 'target_os="android"',
@@ -979,15 +1094,15 @@ def build_webrtc(
     # ビルド
     if gen_force:
         rm_rf(webrtc_build_dir)
-    if not os.path.exists(os.path.join(webrtc_build_dir, "args.gn")) or gen:
+    if needs_gn_gen(webrtc_build_dir, force=gen):
         gn_args = [
             f"is_debug={'true' if debug else 'false'}",
             *COMMON_GN_ARGS,
         ]
-        if target in ["windows_x86_64", "windows_arm64"]:
+        if target in ["windows_x86_64", "windows_x86", "windows_arm64"]:
             gn_args += [
                 'target_os="win"',
-                f'target_cpu="{"x64" if target == "windows_x86_64" else "arm64"}"',
+                f'target_cpu="{"x64" if target == "windows_x86_64" else "x86" if target == "windows_x86" else "arm64"}"',
                 "use_custom_libcxx=false",
             ]
         elif target in ("macos_arm64",):
@@ -1050,14 +1165,14 @@ def build_webrtc(
         return
 
     cmd(["ninja", "-C", webrtc_build_dir, *get_build_targets(target)])
-    if target in ["windows_x86_64", "windows_arm64"]:
+    if target in ["windows_x86_64", "windows_x86", "windows_arm64"]:
         pass
     elif target in ("macos_arm64",):
         ar = "/usr/bin/ar"
     else:
         ar = os.path.join(webrtc_src_dir, "third_party/llvm-build/Release+Asserts/bin/llvm-ar")
 
-    if target in ["windows_x86_64", "windows_arm64"]:
+    if target in ["windows_x86_64", "windows_x86", "windows_arm64"]:
         # Windows は ar する代わりにファイルをコピーする
         shutil.copyfile(
             os.path.join(webrtc_build_dir, "obj", "webrtc.lib"),
@@ -1114,7 +1229,7 @@ def build_webrtc(
 
 
 def copy_headers(webrtc_src_dir, webrtc_package_dir, target):
-    if target in ["windows_x86_64", "windows_arm64"]:
+    if target in ["windows_x86_64", "windows_x86", "windows_arm64"]:
         # robocopy の戻り値は特殊なので、check=False にしてうまくエラーハンドリングする
         # https://docs.microsoft.com/ja-jp/troubleshoot/windows-server/backup-and-storage/return-codes-used-robocopy-utility
         r = cmd(
@@ -1274,7 +1389,7 @@ def package_webrtc(
     generate_deps_info(webrtc_src_dir, webrtc_package_dir)
 
     # ライブラリ
-    if target in ["windows_x86_64", "windows_arm64"]:
+    if target in ["windows_x86_64", "windows_x86", "windows_arm64"]:
         files = [
             (["webrtc.lib"], ["lib", "webrtc.lib"]),
         ]
@@ -1321,7 +1436,7 @@ def package_webrtc(
 
     # 圧縮
     with cd(package_dir):
-        if target in ["windows_x86_64", "windows_arm64"]:
+        if target in ["windows_x86_64", "windows_x86", "windows_arm64"]:
             with zipfile.ZipFile(f"webrtc.{target}.zip", "w") as f:
                 for file in enum_all_files("webrtc", "."):
                     f.write(filename=file, arcname=file)
@@ -1346,6 +1461,7 @@ def package_webrtc(
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 TARGETS = [
     "windows_x86_64",
+    "windows_x86",
     "windows_arm64",
     "macos_arm64",
     "ubuntu-20.04_x86_64",
@@ -1367,7 +1483,7 @@ def check_target(target):
 
     if platform.system() == "Windows":
         logging.info(f"OS: {platform.system()}")
-        return target in ["windows_x86_64", "windows_arm64"]
+        return target in ["windows_x86_64", "windows_x86", "windows_arm64"]
     elif platform.system() == "Darwin":
         logging.info(f"OS: {platform.system()}")
         return target in ("macos_arm64", "ios")
@@ -1630,13 +1746,13 @@ def main():
             else None
         )
 
-    if args.target in ["windows_x86_64", "windows_arm64"]:
+    if args.target in ["windows_x86_64", "windows_x86", "windows_arm64"]:
         # Windows の WebRTC ビルドに必要な環境変数の設定
         mkdir_p(build_dir)
         download(
             "https://github.com/microsoft/vswhere/releases/download/2.8.4/vswhere.exe", build_dir
         )
-        path = cmdcap(
+        vs_install_path = cmdcap(
             [
                 os.path.join(build_dir, "vswhere.exe"),
                 "-latest",
@@ -1648,14 +1764,18 @@ def main():
                 "installationPath",
             ]
         )
-        if len(path) == 0:
+        if len(vs_install_path) == 0:
             raise Exception("Visual Studio not installed")
-        path = os.path.join(path, "Common7", "Tools", "VsDevCmd.bat")
-        stdout = cmdcap(["cmd", "/c", f"{path}", "&&", "set"])
+        vsdevcmd_path = os.path.join(vs_install_path, "Common7", "Tools", "VsDevCmd.bat")
+        stdout = cmdcap(["cmd", "/c", f"{vsdevcmd_path}", "&&", "set"])
         for m in re.finditer(r"(\w+)=(.*)", stdout):
             os.environ[m.group(1)] = m.group(2)
 
-        os.environ["GYP_MSVS_VERSION"] = "2019"
+        # Chromium's Windows toolchain scripts only recognize up to VS 2022.
+        # Alias newer VS installs to the VS 2022 environment variables.
+        os.environ["GYP_MSVS_VERSION"] = "2022"
+        os.environ["GYP_MSVS_OVERRIDE_PATH"] = vs_install_path
+        os.environ["vs2022_install"] = vs_install_path
         os.environ["DEPOT_TOOLS_WIN_TOOLCHAIN"] = "0"
         os.environ["PYTHONIOENCODING"] = "utf-8"
 
@@ -1679,7 +1799,7 @@ def main():
 
             dir = get_depot_tools(source_dir, fetch=args.depottools_fetch)
             add_path(dir)
-            if args.target in ["windows_x86_64", "windows_arm64"]:
+            if args.target in ["windows_x86_64", "windows_x86", "windows_arm64"]:
                 cmd(["git", "config", "--global", "core.longpaths", "true"])
 
             # ソース取得

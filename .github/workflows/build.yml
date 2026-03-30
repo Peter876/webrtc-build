@@ -17,6 +17,7 @@ jobs:
       matrix:
         platform:
           - name: windows_x86_64
+          - name: windows_x86
           - name: windows_arm64
     runs-on: windows-2022
     steps:
@@ -179,6 +180,9 @@ jobs:
       - uses: ./.github/actions/download
         with:
           platform: windows_x86_64
+      - uses: ./.github/actions/download
+        with:
+          platform: windows_x86
       - uses: ./.github/actions/download
         with:
           platform: windows_arm64
