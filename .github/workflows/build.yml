@@ -63,6 +63,7 @@ jobs:
         with:
           name: webrtc.${{ matrix.platform.name }}.zip
           path: _package/${{ matrix.platform.name }}/webrtc.${{ matrix.platform.name }}.zip
+  # Temporarily disabled: build-macos (only Windows builds are active)
   build-macos:
     strategy:
       fail-fast: false
@@ -71,6 +72,7 @@ jobs:
           - name: macos_arm64
           - name: ios
     runs-on: macos-14
+    if: false
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode 15.4
@@ -103,6 +105,7 @@ jobs:
         with:
           name: WebRTC.xcframework.zip
           path: _package/${{ matrix.platform.name }}/WebRTC.xcframework.zip
+  # Temporarily disabled: build-linux (only Windows builds are active)
   build-linux:
     strategy:
       fail-fast: false
@@ -115,6 +118,7 @@ jobs:
           - name: android
             runs-on: ubuntu-22.04
     runs-on: ${{ matrix.platform.runs-on }}
+    if: false
     steps:
       - uses: actions/checkout@v4
       - name: Disk Cleanup
@@ -172,8 +176,6 @@ jobs:
     if: contains(github.ref, 'tags/m')
     needs:
       - build-windows
-      - build-macos
-      - build-linux
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -186,31 +188,32 @@ jobs:
       - uses: ./.github/actions/download
         with:
           platform: windows_arm64
-      - uses: ./.github/actions/download
-        with:
-          platform: macos_arm64
-      - uses: ./.github/actions/download
-        with:
-          platform: ios
-      - uses: ./.github/actions/download
-        with:
-          platform: ubuntu-20.04_armv8
-      - uses: ./.github/actions/download
-        with:
-          platform: ubuntu-20.04_x86_64
-      - uses: ./.github/actions/download
-        with:
-          platform: android
-      # Sora iOS SDK 向けバイナリの WebRTC.xcframework.zip をダウンロードする
-      - name: Env to output for WebRTC.xcframework.zip
-        shell: bash
-        run: |
-          PACKAGE_NAME=WebRTC.xcframework.zip
-          echo "$PACKAGE_NAME/$PACKAGE_NAME" >> package_paths.env
-      - uses: actions/download-artifact@v4
-        with:
-          name: WebRTC.xcframework.zip
-          path: WebRTC.xcframework.zip
+      # Temporarily disabled: downloads for non-Windows platforms
+      # - uses: ./.github/actions/download
+      #   with:
+      #     platform: macos_arm64
+      # - uses: ./.github/actions/download
+      #   with:
+      #     platform: ios
+      # - uses: ./.github/actions/download
+      #   with:
+      #     platform: ubuntu-20.04_armv8
+      # - uses: ./.github/actions/download
+      #   with:
+      #     platform: ubuntu-20.04_x86_64
+      # - uses: ./.github/actions/download
+      #   with:
+      #     platform: android
+      # # Sora iOS SDK 向けバイナリの WebRTC.xcframework.zip をダウンロードする
+      # - name: Env to output for WebRTC.xcframework.zip
+      #   shell: bash
+      #   run: |
+      #     PACKAGE_NAME=WebRTC.xcframework.zip
+      #     echo "$PACKAGE_NAME/$PACKAGE_NAME" >> package_paths.env
+      # - uses: actions/download-artifact@v4
+      #   with:
+      #     name: WebRTC.xcframework.zip
+      #   path: WebRTC.xcframework.zip
       - name: Env to output
         run: |
           echo "package_paths<<EOF" >> $GITHUB_OUTPUT
