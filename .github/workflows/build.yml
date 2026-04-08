@@ -16,6 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         platform:
+          - name: windows_x86
           - name: windows_x86_64
           - name: windows_arm64
     runs-on: windows-2022
@@ -63,6 +64,7 @@ jobs:
           name: webrtc.${{ matrix.platform.name }}.zip
           path: _package/${{ matrix.platform.name }}/webrtc.${{ matrix.platform.name }}.zip
   build-macos:
+    if: ${{ false }}
     strategy:
       fail-fast: false
       matrix:
@@ -103,6 +105,7 @@ jobs:
           name: WebRTC.xcframework.zip
           path: _package/${{ matrix.platform.name }}/WebRTC.xcframework.zip
   build-linux:
+    if: ${{ false }}
     strategy:
       fail-fast: false
       matrix:
@@ -173,45 +176,18 @@ jobs:
     if: contains(github.ref, 'tags/m')
     needs:
       - build-windows
-      - build-macos
-      - build-linux
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
+      - uses: ./.github/actions/download
+        with:
+          platform: windows_x86
       - uses: ./.github/actions/download
         with:
           platform: windows_x86_64
       - uses: ./.github/actions/download
         with:
           platform: windows_arm64
-      - uses: ./.github/actions/download
-        with:
-          platform: macos_arm64
-      - uses: ./.github/actions/download
-        with:
-          platform: ios
-      - uses: ./.github/actions/download
-        with:
-          platform: ubuntu-22.04_armv8
-      - uses: ./.github/actions/download
-        with:
-          platform: ubuntu-22.04_x86_64
-      - uses: ./.github/actions/download
-        with:
-          platform: android
-      - uses: ./.github/actions/download
-        with:
-          platform: android_sdk
-      # Sora iOS SDK 向けバイナリの WebRTC.xcframework.zip をダウンロードする
-      - name: Env to output for WebRTC.xcframework.zip
-        shell: bash
-        run: |
-          PACKAGE_NAME=WebRTC.xcframework.zip
-          echo "$PACKAGE_NAME/$PACKAGE_NAME" >> package_paths.env
-      - uses: actions/download-artifact@v5
-        with:
-          name: WebRTC.xcframework.zip
-          path: WebRTC.xcframework.zip
       - name: Env to output
         run: |
           echo "package_paths<<EOF" >> $GITHUB_OUTPUT

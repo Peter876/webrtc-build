@@ -174,8 +174,28 @@ def get_depot_tools(source_dir, fetch=False):
         )
     return dir
 
+WINDOWS_TARGETS = [
+    "windows_x86",
+    "windows_x86_64",
+    "windows_arm64",
+]
+
 
 PATCHES = {
+    "windows_x86": [
+        "4k.patch",
+        "revive_proxy.patch",
+        "add_license_dav1d.patch",
+        "windows_add_deps.patch",
+        "windows_silence_warnings.patch",
+        "windows_fix_audio_device.patch",
+        "ssl_verify_callback_with_native_handle.patch",
+        "h265.patch",
+        "fix_perfetto.patch",
+        "fix_moved_function_call.patch",
+        "remove_crel.patch",
+        "windows_fix_adm_device_count.patch",
+    ],
     "windows_x86_64": [
         "4k.patch",
         "revive_proxy.patch",
@@ -713,10 +733,20 @@ WEBRTC_BUILD_TARGETS = {
 
 def get_build_targets(target):
     ts = [":default"]
-    if target not in ("windows_x86_64", "windows_arm64"):
+    if target not in WINDOWS_TARGETS:
         ts += ["buildtools/third_party/libc++"]
     ts += WEBRTC_BUILD_TARGETS.get(target, [])
     return ts
+
+
+def get_windows_target_cpu(target):
+    if target == "windows_x86":
+        return "x86"
+    if target == "windows_x86_64":
+        return "x64"
+    if target == "windows_arm64":
+        return "arm64"
+    raise Exception(f"Target {target} is not a Windows target")
 
 
 IOS_ARCHS = ["device:arm64"]
@@ -1034,10 +1064,10 @@ def build_webrtc(
             f"is_debug={'true' if debug else 'false'}",
             *COMMON_GN_ARGS,
         ]
-        if target in ["windows_x86_64", "windows_arm64"]:
+        if target in WINDOWS_TARGETS:
             gn_args += [
                 'target_os="win"',
-                f'target_cpu="{"x64" if target == "windows_x86_64" else "arm64"}"',
+                f'target_cpu="{get_windows_target_cpu(target)}"',
                 "use_custom_libcxx=false",
                 "use_custom_libcxx_for_host=false",
             ]
@@ -1088,14 +1118,14 @@ def build_webrtc(
         return
 
     cmd(["ninja", "-C", webrtc_build_dir, *get_build_targets(target)])
-    if target in ["windows_x86_64", "windows_arm64"]:
+    if target in WINDOWS_TARGETS:
         pass
     elif target in ("macos_arm64",):
         ar = "/usr/bin/ar"
     else:
         ar = os.path.join(webrtc_src_dir, "third_party/llvm-build/Release+Asserts/bin/llvm-ar")
 
-    if target in ["windows_x86_64", "windows_arm64"]:
+    if target in WINDOWS_TARGETS:
         # Windows は ar する代わりにファイルをコピーする
         shutil.copyfile(
             os.path.join(webrtc_build_dir, "obj", "webrtc.lib"),
@@ -1152,7 +1182,7 @@ def build_webrtc(
 
 
 def copy_headers(webrtc_src_dir, webrtc_package_dir, target):
-    if target in ["windows_x86_64", "windows_arm64"]:
+    if target in WINDOWS_TARGETS:
         # robocopy の戻り値は特殊なので、check=False にしてうまくエラーハンドリングする
         # https://docs.microsoft.com/ja-jp/troubleshoot/windows-server/backup-and-storage/return-codes-used-robocopy-utility
         r = cmd(
@@ -1302,7 +1332,7 @@ def package_webrtc(
 
     # ライブラリ
     src_root_dir = webrtc_build_dir
-    if target in ["windows_x86_64", "windows_arm64"]:
+    if target in WINDOWS_TARGETS:
         files = [
             (["webrtc.lib"], ["lib", "webrtc.lib"]),
         ]
@@ -1356,7 +1386,7 @@ def package_webrtc(
 
     # 圧縮
     with cd(package_dir):
-        if target in ["windows_x86_64", "windows_arm64"]:
+        if target in WINDOWS_TARGETS:
             with zipfile.ZipFile(f"webrtc.{target}.zip", "w") as f:
                 for file in enum_all_files("webrtc", "."):
                     f.write(filename=file, arcname=file)
@@ -1380,6 +1410,7 @@ def package_webrtc(
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 TARGETS = [
+    "windows_x86",
     "windows_x86_64",
     "windows_arm64",
     "macos_arm64",
@@ -1401,7 +1432,7 @@ def check_target(target):
 
     if platform.system() == "Windows":
         logging.info(f"OS: {platform.system()}")
-        return target in ["windows_x86_64", "windows_arm64"]
+        return target in WINDOWS_TARGETS
     elif platform.system() == "Darwin":
         logging.info(f"OS: {platform.system()}")
         return target in ("macos_arm64", "ios", "ios_sdk")
@@ -1658,7 +1689,7 @@ def main():
             else None
         )
 
-    if args.target in ["windows_x86_64", "windows_arm64"]:
+    if args.target in WINDOWS_TARGETS:
         # Windows の WebRTC ビルドに必要な環境変数の設定
         mkdir_p(build_dir)
         download(
@@ -1679,11 +1710,12 @@ def main():
         if len(path) == 0:
             raise Exception("Visual Studio not installed")
         path = os.path.join(path, "Common7", "Tools", "VsDevCmd.bat")
-        stdout = cmdcap(["cmd", "/c", f"{path}", "&&", "set"])
+        arch = get_windows_target_cpu(args.target)
+        stdout = cmdcap(["cmd", "/c", path, f"-arch={arch}", "&&", "set"])
         for m in re.finditer(r"(\w+)=(.*)", stdout):
             os.environ[m.group(1)] = m.group(2)
 
-        os.environ["GYP_MSVS_VERSION"] = "2019"
+        os.environ["GYP_MSVS_VERSION"] = "2022"
         os.environ["DEPOT_TOOLS_WIN_TOOLCHAIN"] = "0"
         os.environ["PYTHONIOENCODING"] = "utf-8"
 
@@ -1707,7 +1739,7 @@ def main():
 
             dir = get_depot_tools(source_dir, fetch=args.depottools_fetch)
             add_path(dir)
-            if args.target in ["windows_x86_64", "windows_arm64"]:
+            if args.target in WINDOWS_TARGETS:
                 cmd(["git", "config", "--global", "core.longpaths", "true"])
 
             # ソース取得
